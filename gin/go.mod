@@ -3,7 +3,7 @@ module github.com/desgnspace/go-sanctum/gin
 go 1.25.0
 
 require (
-	github.com/desgnspace/go-sanctum v0.0.0
+	github.com/desgnspace/go-sanctum v0.1.2
 	github.com/gin-gonic/gin v1.12.0
 )
 
@@ -38,5 +38,3 @@ require (
 	golang.org/x/text v0.34.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )
-
-replace github.com/desgnspace/go-sanctum => ../

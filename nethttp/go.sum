@@ -1,2 +1,5 @@
 github.com/DATA-DOG/go-sqlmock v1.5.2 h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7OputlJIzU=
 github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
+github.com/desgnspace/go-sanctum v0.1.2 h1:lTQBeXgE3IOMYt8Ei6zJB3iTu1+MiyYgARFzNa8rax4=
+github.com/desgnspace/go-sanctum v0.1.2/go.mod h1:PvKlEhnRihHY9HIepKcL+10nxUeBSBvyFi0Di5K+usc=
+github.com/kisielk/sqlstruct v0.0.0-20201105191214-5f3e10d3ab46/go.mod h1:yyMNCyc/Ib3bDTKd379tNMpB/7/H5TjM2Y9QJ5THLbE=
