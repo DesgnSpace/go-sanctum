@@ -117,7 +117,11 @@ validator := sanctum.NewValidator(cfg)
 
 Each middleware extracts the `Bearer` token from the `Authorization` header, validates it, and stores the `*TokenData` in the request context.
 
+Framework middlewares live in separate Go modules. Install the one you need alongside the core package.
+
 ### net/http
+
+Included in the core module — no extra install needed.
 
 ```go
 import sanctumhttp "github.com/desgnspace/go-sanctum/nethttp"
@@ -130,6 +134,10 @@ token := sanctumhttp.TokenFromContext(r.Context())
 
 ### Gin
 
+```bash
+go get github.com/desgnspace/go-sanctum/gin
+```
+
 ```go
 import sanctumgin "github.com/desgnspace/go-sanctum/gin"
 
@@ -140,6 +148,10 @@ token := sanctumgin.TokenFromContext(c)
 ```
 
 ### Fiber
+
+```bash
+go get github.com/desgnspace/go-sanctum/fiber
+```
 
 ```go
 import sanctumfiber "github.com/desgnspace/go-sanctum/fiber"

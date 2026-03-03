@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -28,6 +29,7 @@ type SQLStore struct {
 	db          *sql.DB
 	table       string
 	placeholder PlaceholderFunc
+	location    *time.Location
 }
 
 type SQLStoreOption func(*SQLStore)
@@ -44,11 +46,18 @@ func WithPlaceholder(fn PlaceholderFunc) SQLStoreOption {
 	}
 }
 
+func WithLocation(loc *time.Location) SQLStoreOption {
+	return func(s *SQLStore) {
+		s.location = loc
+	}
+}
+
 func NewSQLStore(db *sql.DB, opts ...SQLStoreOption) *SQLStore {
 	s := &SQLStore{
 		db:          db,
 		table:       "personal_access_tokens",
 		placeholder: QuestionMark,
+		location:    loadLocation(),
 	}
 
 	for _, opt := range opts {
@@ -56,6 +65,20 @@ func NewSQLStore(db *sql.DB, opts ...SQLStoreOption) *SQLStore {
 	}
 
 	return s
+}
+
+func loadLocation() *time.Location {
+	tz := os.Getenv("APP_TIMEZONE")
+	if tz == "" {
+		return time.UTC
+	}
+
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return time.UTC
+	}
+
+	return loc
 }
 
 func (s *SQLStore) FindByID(id string) (*TokenData, error) {
@@ -82,7 +105,7 @@ func (s *SQLStore) TouchLastUsedAt(id string) error {
 		s.table, s.placeholder(1), s.placeholder(2),
 	)
 
-	_, err := s.db.Exec(query, time.Now(), id)
+	_, err := s.db.Exec(query, time.Now().In(s.location), id)
 
 	return err
 }
