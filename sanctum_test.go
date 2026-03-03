@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -300,6 +301,79 @@ func TestTokenData_Cant(t *testing.T) {
 
 	if token.Cant("read") {
 		t.Error("expected Cant('read') to be false")
+	}
+}
+
+func TestLoadLocation_DefaultUTC(t *testing.T) {
+	os.Unsetenv("APP_TIMEZONE")
+
+	loc := loadLocation()
+	if loc != time.UTC {
+		t.Errorf("expected UTC, got %v", loc)
+	}
+}
+
+func TestLoadLocation_ValidTimezone(t *testing.T) {
+	os.Setenv("APP_TIMEZONE", "America/New_York")
+	defer os.Unsetenv("APP_TIMEZONE")
+
+	loc := loadLocation()
+	expected, _ := time.LoadLocation("America/New_York")
+
+	if loc.String() != expected.String() {
+		t.Errorf("expected %s, got %s", expected, loc)
+	}
+}
+
+func TestLoadLocation_InvalidTimezone(t *testing.T) {
+	os.Setenv("APP_TIMEZONE", "Invalid/Zone")
+	defer os.Unsetenv("APP_TIMEZONE")
+
+	loc := loadLocation()
+	if loc != time.UTC {
+		t.Errorf("expected UTC fallback, got %v", loc)
+	}
+}
+
+func TestWithLocation_OverridesEnv(t *testing.T) {
+	os.Setenv("APP_TIMEZONE", "America/New_York")
+	defer os.Unsetenv("APP_TIMEZONE")
+
+	db, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	tokyo, _ := time.LoadLocation("Asia/Tokyo")
+	store := NewSQLStore(db, WithLocation(tokyo))
+
+	if store.location.String() != tokyo.String() {
+		t.Errorf("expected %s, got %s", tokyo, store.location)
+	}
+}
+
+func TestTouchLastUsedAt_UsesLocation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	tokyo, _ := time.LoadLocation("Asia/Tokyo")
+	store := NewSQLStore(db, WithLocation(tokyo))
+
+	mock.ExpectExec("UPDATE personal_access_tokens SET last_used_at").
+		WithArgs(sqlmock.AnyArg(), "1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err = store.TouchLastUsedAt("1")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
 	}
 }
 
