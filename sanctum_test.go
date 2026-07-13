@@ -1,8 +1,10 @@
 package sanctum
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -39,11 +41,10 @@ func TestCheckToken_ValidWithID(t *testing.T) {
 				AddRow("1", "42", "App\\Models\\User", "api-token", hashed, `["read","write"]`, nil, time.Now(), nil),
 		)
 
-	mock.ExpectExec("UPDATE personal_access_tokens SET last_used_at").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	v := NewValidator(DefaultConfig(db))
-	token, err := v.CheckToken(bearer)
+	cfg := DefaultConfig(db)
+	cfg.UpdateLastUsedAt = false
+	v := NewValidator(cfg)
+	token, err := v.CheckToken(context.Background(), bearer)
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -82,11 +83,10 @@ func TestCheckToken_ValidWithUUID(t *testing.T) {
 				AddRow(tokenID, userID, "App\\Models\\User", "api-token", hashed, `["*"]`, nil, time.Now(), nil),
 		)
 
-	mock.ExpectExec("UPDATE personal_access_tokens SET last_used_at").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	v := NewValidator(DefaultConfig(db))
-	token, err := v.CheckToken(bearer)
+	cfg := DefaultConfig(db)
+	cfg.UpdateLastUsedAt = false
+	v := NewValidator(cfg)
+	token, err := v.CheckToken(context.Background(), bearer)
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -118,11 +118,10 @@ func TestCheckToken_ValidWithoutID(t *testing.T) {
 				AddRow("1", "42", "App\\Models\\User", "api-token", hashed, `["*"]`, nil, time.Now(), nil),
 		)
 
-	mock.ExpectExec("UPDATE personal_access_tokens SET last_used_at").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	v := NewValidator(DefaultConfig(db))
-	token, err := v.CheckToken(plaintext)
+	cfg := DefaultConfig(db)
+	cfg.UpdateLastUsedAt = false
+	v := NewValidator(cfg)
+	token, err := v.CheckToken(context.Background(), plaintext)
 
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -151,7 +150,7 @@ func TestCheckToken_InvalidSignature(t *testing.T) {
 		)
 
 	v := NewValidator(DefaultConfig(db))
-	_, err = v.CheckToken(bearer)
+	_, err = v.CheckToken(context.Background(), bearer)
 
 	if err != ErrTokenInvalid {
 		t.Fatalf("expected ErrTokenInvalid, got %v", err)
@@ -178,7 +177,7 @@ func TestCheckToken_ExpiredViaExpiresAt(t *testing.T) {
 		)
 
 	v := NewValidator(DefaultConfig(db))
-	_, err = v.CheckToken(bearer)
+	_, err = v.CheckToken(context.Background(), bearer)
 
 	if err != ErrTokenExpired {
 		t.Fatalf("expected ErrTokenExpired, got %v", err)
@@ -208,7 +207,7 @@ func TestCheckToken_ExpiredViaGlobalExpiration(t *testing.T) {
 	cfg.ExpirationMinutes = 60
 
 	v := NewValidator(cfg)
-	_, err = v.CheckToken(bearer)
+	_, err = v.CheckToken(context.Background(), bearer)
 
 	if err != ErrTokenExpired {
 		t.Fatalf("expected ErrTokenExpired, got %v", err)
@@ -227,7 +226,7 @@ func TestCheckToken_NotFound(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(tokenColumns))
 
 	v := NewValidator(DefaultConfig(db))
-	_, err = v.CheckToken("999|some-plaintext")
+	_, err = v.CheckToken(context.Background(), "999|some-plaintext")
 
 	if err != ErrTokenNotFound {
 		t.Fatalf("expected ErrTokenNotFound, got %v", err)
@@ -242,7 +241,7 @@ func TestCheckToken_EmptyToken(t *testing.T) {
 	defer db.Close()
 
 	v := NewValidator(DefaultConfig(db))
-	_, err = v.CheckToken("")
+	_, err = v.CheckToken(context.Background(), "")
 
 	if err != ErrTokenMissing {
 		t.Fatalf("expected ErrTokenMissing, got %v", err)
@@ -261,7 +260,7 @@ func TestCheckToken_MalformedToken(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(tokenColumns))
 
 	v := NewValidator(DefaultConfig(db))
-	_, err = v.CheckToken("|plaintext")
+	_, err = v.CheckToken(context.Background(), "|plaintext")
 
 	if err != ErrTokenInvalid {
 		t.Fatalf("expected ErrTokenInvalid, got %v", err)
@@ -367,7 +366,7 @@ func TestTouchLastUsedAt_UsesLocation(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), "1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	err = store.TouchLastUsedAt("1")
+	err = store.TouchLastUsedAt(context.Background(), "1")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -388,5 +387,144 @@ func TestPlaceholderFuncs(t *testing.T) {
 
 	if DollarSign(3) != "$3" {
 		t.Errorf("expected '$3', got %s", DollarSign(3))
+	}
+}
+
+type stubTokenStore struct {
+	findContext context.Context
+	touch       func(context.Context, string) error
+}
+
+func (s *stubTokenStore) FindByID(ctx context.Context, _ string) (*TokenData, error) {
+	s.findContext = ctx
+	return &TokenData{ID: "1", Token: hashPlaintext("plaintext")}, nil
+}
+
+func (s *stubTokenStore) FindByHash(ctx context.Context, hash string) (*TokenData, error) {
+	s.findContext = ctx
+	return &TokenData{ID: "1", Token: hash}, nil
+}
+
+func (s *stubTokenStore) TouchLastUsedAt(ctx context.Context, id string) error {
+	return s.touch(ctx, id)
+}
+
+func TestCheckToken_PropagatesContext(t *testing.T) {
+	type contextKey struct{}
+
+	ctx := context.WithValue(context.Background(), contextKey{}, "request-value")
+	store := &stubTokenStore{}
+	v := NewValidator(Config{Store: store})
+
+	if _, err := v.CheckToken(ctx, "plaintext"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if got := store.findContext.Value(contextKey{}); got != "request-value" {
+		t.Fatalf("expected propagated context value, got %v", got)
+	}
+}
+
+func TestTouchLastUsedAt_ReportsErrorWithBoundedDetachedContext(t *testing.T) {
+	type contextKey struct{}
+	dbErr := errors.New("database unavailable")
+	errorsSeen := make(chan error, 1)
+
+	store := &stubTokenStore{
+		touch: func(ctx context.Context, _ string) error {
+			if ctx.Err() != nil {
+				return fmt.Errorf("touch context canceled early: %w", ctx.Err())
+			}
+			if got := ctx.Value(contextKey{}); got != "request-value" {
+				return fmt.Errorf("missing context value: %v", got)
+			}
+			if _, ok := ctx.Deadline(); !ok {
+				return errors.New("touch context has no deadline")
+			}
+			return dbErr
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "request-value"))
+	cancel()
+
+	v := NewValidator(Config{
+		Store:            store,
+		UpdateLastUsedAt: true,
+		ErrorHandler: func(err error) {
+			errorsSeen <- err
+		},
+	})
+
+	if _, err := v.CheckToken(ctx, "plaintext"); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	select {
+	case err := <-errorsSeen:
+		if !errors.Is(err, dbErr) {
+			t.Fatalf("expected wrapped database error, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for error handler")
+	}
+}
+
+func TestTouchLastUsedAt_BoundsConcurrency(t *testing.T) {
+	started := make(chan struct{}, maxConcurrentTouches)
+	release := make(chan struct{})
+	done := make(chan struct{}, maxConcurrentTouches)
+	errorsSeen := make(chan error, 1)
+
+	store := &stubTokenStore{
+		touch: func(ctx context.Context, _ string) error {
+			started <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			done <- struct{}{}
+			return nil
+		},
+	}
+	v := NewValidator(Config{
+		Store:            store,
+		UpdateLastUsedAt: true,
+		ErrorHandler: func(err error) {
+			errorsSeen <- err
+		},
+	})
+
+	for i := 0; i < maxConcurrentTouches; i++ {
+		if _, err := v.CheckToken(context.Background(), "plaintext"); err != nil {
+			t.Fatalf("check token %d: %v", i, err)
+		}
+		<-started
+	}
+
+	if _, err := v.CheckToken(context.Background(), "plaintext"); err != nil {
+		t.Fatalf("check token at limit: %v", err)
+	}
+	if err := <-errorsSeen; !errors.Is(err, ErrTouchLastUsedAtBusy) {
+		t.Fatalf("expected ErrTouchLastUsedAtBusy, got %v", err)
+	}
+
+	close(release)
+	for i := 0; i < maxConcurrentTouches; i++ {
+		<-done
+	}
+}
+
+func TestWithTable_RejectsMalformedNames(t *testing.T) {
+	for _, table := range []string{"", "tokens; DROP TABLE users", "token table", "\"tokens\""} {
+		t.Run(table, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+
+			WithTable(table)
+		})
 	}
 }

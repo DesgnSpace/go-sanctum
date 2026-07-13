@@ -1,18 +1,20 @@
 package sanctum
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
 type TokenStore interface {
-	FindByID(id string) (*TokenData, error)
-	FindByHash(hash string) (*TokenData, error)
-	TouchLastUsedAt(id string) error
+	FindByID(ctx context.Context, id string) (*TokenData, error)
+	FindByHash(ctx context.Context, hash string) (*TokenData, error)
+	TouchLastUsedAt(ctx context.Context, id string) error
 }
 
 type PlaceholderFunc func(index int) string
@@ -25,6 +27,8 @@ func DollarSign(index int) string {
 	return fmt.Sprintf("$%d", index)
 }
 
+// SQLStore reads Sanctum tokens from a SQL database. Table names and placeholder
+// functions are interpolated into SQL and must come from trusted developer config.
 type SQLStore struct {
 	db          *sql.DB
 	table       string
@@ -34,7 +38,13 @@ type SQLStore struct {
 
 type SQLStoreOption func(*SQLStore)
 
+// WithTable sets the trusted SQL table identifier used in generated queries.
+// It panics if table is empty or contains whitespace, quotes, or semicolons.
 func WithTable(table string) SQLStoreOption {
+	if table == "" || strings.ContainsAny(table, " \t\r\n;'\"`") {
+		panic("sanctum: invalid SQL table name")
+	}
+
 	return func(s *SQLStore) {
 		s.table = table
 	}
@@ -81,31 +91,31 @@ func loadLocation() *time.Location {
 	return loc
 }
 
-func (s *SQLStore) FindByID(id string) (*TokenData, error) {
+func (s *SQLStore) FindByID(ctx context.Context, id string) (*TokenData, error) {
 	query := fmt.Sprintf(
 		"SELECT id, tokenable_id, tokenable_type, name, token, abilities, expires_at, created_at, last_used_at FROM %s WHERE id = %s",
 		s.table, s.placeholder(1),
 	)
 
-	return s.scanToken(s.db.QueryRow(query, id))
+	return s.scanToken(s.db.QueryRowContext(ctx, query, id))
 }
 
-func (s *SQLStore) FindByHash(hash string) (*TokenData, error) {
+func (s *SQLStore) FindByHash(ctx context.Context, hash string) (*TokenData, error) {
 	query := fmt.Sprintf(
 		"SELECT id, tokenable_id, tokenable_type, name, token, abilities, expires_at, created_at, last_used_at FROM %s WHERE token = %s",
 		s.table, s.placeholder(1),
 	)
 
-	return s.scanToken(s.db.QueryRow(query, hash))
+	return s.scanToken(s.db.QueryRowContext(ctx, query, hash))
 }
 
-func (s *SQLStore) TouchLastUsedAt(id string) error {
+func (s *SQLStore) TouchLastUsedAt(ctx context.Context, id string) error {
 	query := fmt.Sprintf(
 		"UPDATE %s SET last_used_at = %s WHERE id = %s",
 		s.table, s.placeholder(1), s.placeholder(2),
 	)
 
-	_, err := s.db.Exec(query, time.Now().In(s.location), id)
+	_, err := s.db.ExecContext(ctx, query, time.Now().In(s.location), id)
 
 	return err
 }
